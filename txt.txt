@@ -1,0 +1,278 @@
+/* 
+  Arduino IoT Cloud integration
+
+  The following variables are automatically generated and updated when changes are made to the Thing
+
+  int treat;
+  bool on;
+
+  Variables which are marked as READ/WRITE in the Cloud Thing will also have functions
+  which are called when their values are changed from the Dashboard.
+  These functions are generated with the Thing and added at the end of this sketch.
+*/
+
+#include "thingProperties.h"
+#include <AccelStepper.h>
+
+// Stepper motors
+AccelStepper stepperX(1, 12, 13); 
+AccelStepper stepperY(1, 3, 6);
+AccelStepper stepperZ(1, 4, 7);
+
+
+// Using 1/8 stepping on stepper motors
+const long STEPS_PER_REV = 1600;
+const long STEPS_PER_SQUARE = 200; // 8 "squares" on each wheel
+
+
+// DC motor
+const int motor_pwm = 9; 
+const int motor_dir = 10;  
+
+// LEVER switch
+const int switchPin = 11;  // Z+ endstop pin on CNC shield
+bool lastSwitchState = false;
+
+
+// tracking slot machine positions
+int Xpos = 0;
+int Ypos = 0;
+int Zpos = 0;
+
+// tracking attempts
+int attemptCounter = 0;
+
+// reel symbol positions
+String reelX[] = {"bowl", "mouse", "bow", "fish", "cat", "bowl", "paw", "fish"};
+String reelY[] = {"bowl", "bow", "bowl", "fish", "paw", "mouse", "fish", "cat"};
+String reelZ[] = {"bowl", "bow", "fish", "cat", "mouse", "bowl", "paw", "fish"};
+
+
+void checkWin() {
+  // Get the current symbols based on positions
+  String symbolX = reelX[Xpos];
+  String symbolY = reelY[Ypos];
+  String symbolZ = reelZ[Zpos];
+
+  Serial.print("Symbols: (");
+  Serial.print(symbolX);
+  Serial.print(", ");
+  Serial.print(symbolY);
+  Serial.print(", ");
+  Serial.print(symbolZ);
+  Serial.print(") at positions (");
+  Serial.print(Xpos);
+  Serial.print(", ");
+  Serial.print(Ypos);
+  Serial.print(", ");
+  Serial.print(Zpos);
+  Serial.println(")");
+  
+
+  // Check if all three symbols match
+  if (symbolX == symbolY && symbolY == symbolZ) {
+    Serial.println("YOU WIN!!");
+
+    motorForward(40);
+  
+    delay(350);
+    motorStop();
+    
+    motorBackward(80);
+    delay(100);
+    motorStop();
+  }
+}
+
+void doJitter(AccelStepper &stepper) {
+
+  int jitterAmount = 40;
+
+  stepper.move(jitterAmount);
+  while (stepper.distanceToGo() != 0) {
+    stepper.run();
+    stepperX.run();
+    stepperY.run();
+    stepperZ.run();
+  }
+
+  stepper.move(-jitterAmount * 2);
+  while (stepper.distanceToGo() != 0) {
+    stepper.run();
+    stepperX.run();
+    stepperY.run();
+    stepperZ.run();
+  }
+
+  stepper.move(jitterAmount);
+  while (stepper.distanceToGo() != 0) {
+    stepper.run();
+    stepperX.run();
+    stepperY.run();
+    stepperZ.run();
+  }
+}
+
+void runSequence() {
+
+  attemptCounter++; 
+  
+  int slotX, slotY, slotZ;
+
+  // Force win every nth attempt, depending on the value of "treat" selected in dashboard
+
+  if (treat > 0 && attemptCounter % treat == 0) {
+    
+    // Pick a random target position for reel X
+    int winPos = random(0, 8);
+    String winSymbol = reelX[winPos];
+    
+    // Find the closest position on Y and Z that shows the same symbol
+    int winPosY = -1, winPosZ = -1;
+    for (int pos = 0; pos < 8; pos++) {
+      if (reelY[pos] == winSymbol) winPosY = pos;
+      if (reelZ[pos] == winSymbol) winPosZ = pos;
+    }
+
+    slotX = (winPos - Xpos + 8) % 8;
+    slotY = (winPosY - Ypos + 8) % 8;
+    slotZ = (winPosZ - Zpos + 8) % 8;
+ }   
+  else{
+    slotX = random(0, 8);
+    slotY = random(0, 8);
+    slotZ = random(0, 8);
+  }
+
+  
+  Xpos = (Xpos + slotX) % 8;
+  Ypos = (Ypos + slotY) % 8;
+  Zpos = (Zpos + slotZ) % 8;  
+
+  long targetX = slotX * STEPS_PER_SQUARE;
+  long targetY = slotY * STEPS_PER_SQUARE;
+  long targetZ = slotZ * STEPS_PER_SQUARE;
+  
+  long moveX = (10 * STEPS_PER_REV) + targetX;
+  long moveY = (12 * STEPS_PER_REV) + targetY;
+  long moveZ = (14 * STEPS_PER_REV) + targetZ;
+  Serial.print("move values ");
+  Serial.println(moveX);
+  stepperX.moveTo(moveX);
+  stepperY.moveTo(moveY);
+  stepperZ.moveTo(moveZ);
+
+  bool xJittered = false;
+  bool yJittered = false;
+  bool zJittered = false;
+  
+  
+  while (!xJittered || !yJittered || !zJittered) {
+    stepperX.run();
+    stepperY.run();
+    stepperZ.run();
+
+    if (!xJittered && stepperX.distanceToGo() == 0) {
+      doJitter(stepperX);
+      xJittered = true;
+    }
+
+    if (!yJittered && stepperY.distanceToGo() == 0) {
+      doJitter(stepperY);
+      yJittered = true;
+    }
+
+    if (!zJittered && stepperZ.distanceToGo() == 0) {
+      doJitter(stepperZ);
+      zJittered = true;
+    }
+
+    
+  }
+  // Check if the combination is in list
+    checkWin();
+
+  digitalWrite(8, HIGH);
+
+  // Reset positions so moveTo works correctly next run
+  stepperX.setCurrentPosition(0);
+  stepperY.setCurrentPosition(0);
+  stepperZ.setCurrentPosition(0);
+}
+
+void setup() {
+
+  Serial.begin(9600);
+  delay(1500);
+
+  initProperties();
+  ArduinoCloud.begin(ArduinoIoTPreferredConnection);
+
+  pinMode(8, OUTPUT);
+  digitalWrite(8, HIGH); // steppers disabled
+
+  pinMode(switchPin, INPUT_PULLUP);
+
+
+  pinMode(motor_pwm, OUTPUT);
+  pinMode(motor_dir, OUTPUT);
+
+
+  // Stop motor initially
+  digitalWrite(motor_dir, LOW);
+  digitalWrite(motor_pwm, 0);
+
+  randomSeed(analogRead(A0));
+
+  stepperX.setMaxSpeed(6000);
+  stepperX.setAcceleration(20000);
+
+  stepperY.setMaxSpeed(6000);
+  stepperY.setAcceleration(20000);
+
+  stepperZ.setMaxSpeed(6000);
+  stepperZ.setAcceleration(20000);
+}
+
+void loop() {
+
+  ArduinoCloud.update();
+
+  // Read switch (active LOW)
+  bool currentSwitchState = !digitalRead(switchPin);
+
+
+  // When physical switch just turned on AND "ON" button on dashboard is on
+  if (currentSwitchState && !lastSwitchState && on) {
+    digitalWrite(8, LOW);   // enable steppers
+    runSequence();
+  }
+
+  lastSwitchState = currentSwitchState;
+
+ 
+}
+
+void onOnChange() {
+  
+}
+
+
+void onTreatChange(){
+  
+}
+
+
+void motorForward(int speed) {
+  digitalWrite(motor_dir, HIGH);
+  analogWrite(motor_pwm, speed);
+}
+
+void motorBackward(int speed) {
+  digitalWrite(motor_dir, LOW);
+  analogWrite(motor_pwm, speed);
+}
+
+void motorStop() {
+  analogWrite(motor_pwm, 0);
+}
